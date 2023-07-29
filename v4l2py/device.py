@@ -19,15 +19,15 @@ import pathlib
 import typing
 from io import IOBase
 from collections import UserDict
-
+import sys
 from . import raw
 from .io import IO, fopen
-
+logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
+                    level=logging.INFO, stream=sys.stdout)
 log = logging.getLogger(__name__)
 log_ioctl = log.getChild("ioctl")
 log_mmap = log.getChild("mmap")
-
-
+# log_ioctl.setLevel(logging.DEBUG)
 class V4L2Error(Exception):
     pass
 
@@ -113,9 +113,15 @@ buffers = {buffers}
 """
 
 
-def ioctl(fd, request, arg):
+def ioctl(fd, request, arg) -> bool:
     log_ioctl.debug("%s, request=%s, arg=%s", fd, request.name, arg)
-    return fcntl.ioctl(fd, request.value, arg)
+    try:
+        result = fcntl.ioctl(fd, request.value, arg)
+        return True
+
+    except OSError as e:
+        log_ioctl.error(e)
+        return False
 
 
 def mem_map(fd, length, offset):
@@ -154,7 +160,8 @@ def raw_crop_caps_to_crop_caps(stream_type, crop):
             crop.defrect.width,
             crop.defrect.height,
         ),
-        pixel_aspect=crop.pixelaspect.numerator / crop.pixelaspect.denominator,
+       
+            pixel_aspect= 0  if (crop.pixelaspect.denominator == 0) else crop.pixelaspect.numerator / crop.pixelaspect.denominator,
     )
 
 
@@ -233,9 +240,13 @@ def frame_sizes(fd, pixel_formats):
         size.index = 0
         while True:
             try:
-                ioctl(fd, IOC.ENUM_FRAMESIZES, size)
+                if(not ioctl(fd, IOC.ENUM_FRAMESIZES, size)):
+                    break
             except OSError:
                 break
+            except Exception as error:
+                log_ioctl.error("%s", error)
+
             if size.type == FrameSizeType.DISCRETE:
                 sizes += get_frame_intervals(
                     pixel_format, size.discrete.width, size.discrete.height
@@ -337,7 +348,8 @@ def read_info(fd):
     image_formats = []
     pixel_formats = set()
     for stream_type in img_fmt_stream_types:
-        for image_format in iter_read_formats(fd, stream_type):
+        formats = iter_read_formats(fd, stream_type)
+        for image_format in formats:
             image_formats.append(image_format)
             pixel_formats.add(image_format.pixel_format)
 
@@ -800,9 +812,15 @@ class Controls(dict):
         ctrl_dict = dict()
 
         for ctrl in device.info.controls:
-            ctrl_type = ControlType(ctrl.type)
-            ctrl_class = ctrl_type_map.get(ctrl_type, GenericControl)
-            ctrl_dict[ctrl.id] = ctrl_class(device, ctrl)
+            if ctrl.type == 0:
+                continue
+            try:
+                ctrl_type = ControlType(ctrl.type)
+                ctrl_class = ctrl_type_map.get(ctrl_type, GenericControl)
+                ctrl_dict[ctrl.id] = ctrl_class(device, ctrl)
+            except Exception as excp:
+                log_ioctl.error(excp)
+                continue
 
         return cls(ctrl_dict)
 
