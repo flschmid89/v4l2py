@@ -121,6 +121,7 @@ def ioctl(fd, request, arg) -> bool:
 
     except OSError as e:
         log_ioctl.error(e)
+        raise e
         return False
 
 
